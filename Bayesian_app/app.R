@@ -7,7 +7,9 @@
 #    http://shiny.rstudio.com/
 #
 
-#library(shiny)
+
+
+library(shiny)
 library(gt)
 library(tidyverse)
 library(nflfastR)
@@ -20,35 +22,66 @@ library(merTools)
 library(ggpmisc)
 library(grid)
 library(gridExtra)
+library(RColorBrewer)
+library(ggsci)
+library(googledrive)
+library(curl)
+library(arrow)
+library(ggrepel)
 
 
 
 
 ##### Data load ####
-pass<-load_pbp(seasons = c(1999:2010)) %>%
-    filter(pass_attempt == 1) %>%
-    mutate(post_team_coach = ifelse(
-        posteam == home_team,home_coach,away_coach),
-        def_team_coach = ifelse(
-            posteam == home_team,away_coach,home_coach))
+#pass<-load_pbp(seasons = c(1999:2010)) %>%
+#    filter(pass_attempt == 1) %>%
+#    mutate(post_team_coach = ifelse(
+#        posteam == home_team,home_coach,away_coach),
+#        def_team_coach = ifelse(
+#            posteam == home_team,away_coach,home_coach)) %>%
+#dplyr::select(play_id,game_id,season,pass_attempt,post_team_coach,posteam,home_team,home_coach,away_coach,
+#                def_team_coach,passer_player_name,passer_id,air_yards,cpoe,air_yards,
+#                yards_after_catch,receiver_id,receiver_player_name,pass_location,pass_length,
+#                qb_epa)
 
 
-#unique(pass$pass_length)
-#unique(pass$pass_location)
+#write_csv(pass,"pass_1999_2010.csv")
 
+pass<-read_csv(url("https://raw.githubusercontent.com/qmaclean/football_bayesian/main/pass_1999_2010.csv"))
 
 
 #separating due to memory
-pass1<-load_pbp(seasons = c(2011:2021)) %>%
-    filter(pass_attempt == 1) %>%
-    mutate(post_team_coach = ifelse(
-        posteam == home_team,home_coach,away_coach),
-        def_team_coach = ifelse(
-            posteam == home_team,away_coach,home_coach))
+#pass1<-load_pbp(seasons = c(2011:2021)) %>%
+#    filter(pass_attempt == 1) %>%
+#    mutate(post_team_coach = ifelse(
+#        posteam == home_team,home_coach,away_coach),
+#        def_team_coach = ifelse(
+#            posteam == home_team,away_coach,home_coach)) %>%
+#  dplyr::select(play_id,game_id,season,pass_attempt,post_team_coach,posteam,home_team,home_coach,away_coach,
+#                def_team_coach,passer_player_name,passer_id,air_yards,cpoe,air_yards,
+#                yards_after_catch,receiver_id,receiver_player_name,pass_location,pass_length,
+#                qb_epa)
+
+#write_csv(pass1,"pass_2011_2021.csv")
+
+pass1<-read_csv(url("https://raw.githubusercontent.com/qmaclean/football_bayesian/main/pass_2011_2021.csv"))
+
 
 pass<-rbind(pass,pass1)
+
 rm(pass1)
-    
+
+pass<-pass %>%
+    mutate(passer_player_name = case_when(
+        passer_player_name == "Aa.Rodgers" ~ "A.Rodgers",
+        passer_player_name == "Jos.Allen" ~ "J.Allen",
+        TRUE ~ as.character(passer_player_name)
+    ))
+
+
+
+
+
 
 roster<-load_rosters(seasons = c(1999:2021)) %>%
     filter(position == "QB")
@@ -57,7 +90,10 @@ wrs<-load_rosters(seasons = c(1999:2021)) %>%
     filter(position %in% c("WR","TE","RB"))
 
 ### add in PSAA data; built per year
-pass.sim.final<-read.csv("~pass.sim.mcmc_all.csv")  ### replace w/ github user content
+pass.sim.final<-read_csv(url("https://raw.githubusercontent.com/qmaclean/football_bayesian/main/Bayesian_app/pass.sim.mcmc_all.csv")) %>%
+    dplyr::select(-...1,-X)
+
+
 
 
 ### DAta COMBINE
@@ -69,6 +105,8 @@ pass_metrics<-pass %>%
               mean_yards_after_catch = mean(yards_after_catch,na.rm=TRUE),
               
     )
+
+
 
 
 top_receiver <-pass %>%
@@ -83,7 +121,7 @@ top_receiver <-pass %>%
     group_by(passer_id,passer_player_name,season) %>%
     filter(complete.cases(receiver_id),
            sum_air_yards_wr > 0) %>%
-        top_n(n = 1,wt=receptions) %>%
+        top_n(n = 5,wt=receptions) %>%
     ungroup() %>%
     left_join(wrs,by=c("receiver_id" = "gsis_id","season" = "season")) %>%
     dplyr::select(passer_id,passer_player_name,receiver_id,full_name,season,sum_air_yards_wr,mean_cpoe_wr,mean_air_yards_wr,
@@ -107,9 +145,12 @@ top_receiver <-pass %>%
 
 
 
+
+
 names<-pass.sim.final %>% 
     dplyr::select(full_name) %>%
-    arrange(full_name)
+    arrange(full_name) %>%
+    distinct()
 
 teams<-pass.sim.final %>%
     dplyr::select(team) %>%
@@ -132,12 +173,7 @@ tab_data<- pass.sim.final %>%
 pass<-pass %>%
     left_join(tab_data,by=c("passer_id","season"))
 
-pass<-pass %>%
-    mutate(passer_player_name = case_when(
-        passer_player_name == "Aa.Rodgers" ~ "A.Rodgers",
-        passer_player_name == "Jos.Allen" ~ "J.Allen",
-        TRUE ~ as.character(passer_player_name)
-    ))
+
 
 min<-min(tab_data$chances)
 max<-max(tab_data$chances)
@@ -152,7 +188,7 @@ ui <- fluidPage(
     
     theme = shinytheme("united"),
     # Application title
-    titlePanel("Passing Success Above Average"),
+    titlePanel("Q**2Bs"),
     tags$div("This site is supposed to show advanced metrics for QBs"),
     br(),
     uiOutput('QBs'),
@@ -166,26 +202,27 @@ ui <- fluidPage(
                                        
                                        tags$h3("Parameters"),
                                        
-                                      selectInput(
+                                      shiny::selectizeInput(
                                           inputId = "season",
                                           label = "Season:",
                                           choices = 1999:2021,
-                                          selected = 2021
+                                          selected = NULL
                                       ),
-                                       
+            
                                        sliderInput(
                                            inputId =  "min_chances",
                                            label = "Minimum Passes:",
                                            min = min, max = max,
-                                           value = 400
+                                           value = 300
                                        ),
                                       
-                                      selectInput(
+                                      shiny::selectizeInput(
                                           inputId = "QB",
                                           label = "QBs:",
                                           choices = names,
-                                          selected = NULL,
-                                          multiple = TRUE
+                                          selected = NULL, #c("Justin Herbert","Patrick Mahomes","Derek Carr","Russell Wilson"),
+                                          multiple = TRUE#,
+                                          #options = list(...)
                                       )
                                        
                                 ),
@@ -195,7 +232,9 @@ ui <- fluidPage(
         mainPanel(
             tabsetPanel(
                   tabPanel("Summary",
-                           column(12,gt_output("tbl"))),
+                           splitLayout(cellWidths = c("100%","100%"),
+                           column(12,gt_output("tbl")),
+                           plotOutput("trendGraph1"))),
                   tabPanel("Plot",
                   fluidRow(
                       splitLayout(cellWidths = c("100%","100%"),
@@ -235,9 +274,38 @@ ui <- fluidPage(
 
 
 # Define server logic required to draw a histogram
-server <- function(input, output,session) {
+server <- function(input, output) {
+    
+    #options(shiny.maxRequestSize=10*1024^2)
     
     
+    
+    #observeEvent({
+        
+    updateSelectizeInput(
+        inputId = 'season',
+        choices = 1999:2021,
+        selected = 2021#,
+        #server = TRUE
+    ) 
+    
+    
+    updateSliderInput(
+        inputId = 'min_chances',
+        value = 300,
+        min = min,
+        max = max
+        )
+    
+    updateSelectizeInput(
+        inputId = 'QB',
+        choices = c(Choose = '',names),
+        server = TRUE,
+        selected = c("Justin Herbert","Patrick Mahomes","Derek Carr","Russell Wilson"),
+        options = list(maxOptions = 5000)
+    )
+    
+    #})
     
     output$tbl<-render_gt({
         
@@ -273,7 +341,7 @@ server <- function(input, output,session) {
                mean_cpoe = "CPOE Avg."
            ) %>%
            data_color(
-               columns = vars(sim.mean),
+               columns = c(sim.mean),
                colors = scales::col_numeric(
                    palette = c("#f7f7f7","#7fbf7b"),         
                    domain = NULL
@@ -282,7 +350,7 @@ server <- function(input, output,session) {
            tab_style(
                style = cell_text(weight = "bold"),
                locations = cells_body(
-                   columns = vars(full_name,team,season)
+                   columns = c(full_name,team,season)
                )
            ) %>% 
            tab_options(
@@ -315,6 +383,52 @@ server <- function(input, output,session) {
             
     })
     
+    output$trendGraph1<-renderPlot({
+      
+      pass.sim.final1<-pass.sim.final %>%
+        dplyr::filter(season <= input$season) %>%
+        dplyr::filter(full_name %in% input$QB) %>%
+        mutate(label = if_else(season == max(season), as.character(full_name), NA_character_)) 
+      
+      s<-as.numeric(input$season)
+      name_lab<-pass.sim.final1$full_name
+      
+      pass.sim.final1 %>%
+        ggplot() +
+        aes(x=season,y=mcmc.mean,group=full_name,color=name_lab) +
+        theme_bw() +
+        geom_line(size = 1) +
+        geom_point(size = 3) +
+        geom_hline(
+          yintercept = 0,
+          color="grey91",
+          size = 2,
+          linetype="dashed"
+        ) +
+        geom_text_repel(
+          aes(color = full_name, label = label),
+          fontface = "bold",
+          size = 6,
+          direction = "y",
+          xlim = c(s+0.8, NA),
+          hjust = 1,
+          segment.size = .7,
+          segment.alpha = .5,
+          segment.linetype = "dotted",
+          box.padding = .2,
+          segment.curvature = -0.1,
+          segment.ncp = 3,
+          segment.angle = 20
+        ) +  coord_cartesian(
+          clip = "off",
+          ylim = c(-0.1, 0.1)
+        ) +
+        theme(
+          legend.position = "none"
+        ) 
+      
+    })
+    
    
     
     output$passerGraph1<- renderPlot({
@@ -328,6 +442,8 @@ server <- function(input, output,session) {
         #ggplot(new_pass,aes(x=air_yards,fill=passer_player_name)) +
         #    geom_density(alpha=0.3) +
         #    theme(legend.position = "bottom")
+        
+      
         
         
         new_pass %>%
@@ -363,7 +479,8 @@ server <- function(input, output,session) {
             labs(title = "Air Yards vs Yards After the Catch",
                  x = "AY",
                  y = "YAC"
-                 )
+                 ) +
+            scale_color_brewer(palette = "BuGn")
         
         
         
@@ -376,24 +493,35 @@ server <- function(input, output,session) {
         filter(season == input$season) %>%
         filter(full_name %in% input$QB) %>%
         filter(complete.cases(pass_location),
-               complete.cases(pass_length))
+               complete.cases(pass_length),
+               pass_location != "NA",
+               pass_length != "NA")
+        
+        new_pass1<-new_pass1 %>%
+            mutate(loc = paste(pass_location,pass_length,sep="-")) %>%
+            group_by(passer_player_name,loc) %>%
+            summarize(qb_epa = mean(qb_epa,na.rm = T),
+                      cpoe = mean(cpoe,na.rm = T),
+                      chances = n())
+        
+        
     
     new_pass1 %>%
         ggplot() +
-        aes(x=qb_epa,y=cpoe) +
+        aes(x=qb_epa,y=cpoe,size=chances) +
         geom_point(
             #show.legend = FALSE,
-            size = 2,
-            alpha = 0.2,
-            aes(color = passer_player_name)
+            #size = 5,
+            alpha = 0.8,
+            aes(color = loc) 
             
         ) +
-        facet_wrap(~pass_length + pass_location) +
+        facet_wrap(~passer_player_name) +
         theme_set(theme_minimal()) +
         theme_update(
             text = element_text(size = 9),
             legend.position = "right"
-        ) 
+        ) + scale_color_brewer(palette = "BuGn")
     
     })
    
@@ -441,7 +569,7 @@ server <- function(input, output,session) {
                 mean_yards_after_catch_wr = "YAC"
             ) %>%
             data_color(
-                columns = vars(sum_air_yards_wr),
+                columns = c(sum_air_yards_wr),
                 colors = scales::col_numeric(
                     palette = c("#f7f7f7","#7fbf7b"),         
                     domain = NULL
@@ -450,7 +578,7 @@ server <- function(input, output,session) {
             tab_style(
                 style = cell_text(weight = "bold"),
                 locations = cells_body(
-                    columns = vars(full_name,rec_name,team,season)
+                    columns = c(full_name,rec_name,team,season)
                 )
             ) %>% 
             tab_options(
@@ -484,3 +612,5 @@ server <- function(input, output,session) {
 
 # Run the application 
 shinyApp(ui = ui, server = server)
+
+
