@@ -15,37 +15,35 @@ library(gt)
 library(optimx) 
 library(caret)
 
-
+year<-2021
 #### calculate pass success above average using R STAN
 
-pbp<-load_pbp(seasons = c(2019:2021))
-
-roster<-load_rosters(seasons = most_recent_season())
-
-
-pass<-pbp %>%
+pass<-load_pbp(seasons = c(year)) %>%
   filter(pass_attempt == 1) %>%
   mutate(post_team_coach = ifelse(
     posteam == home_team,home_coach,away_coach),
     def_team_coach = ifelse(
-      posteam == home_team,away_coach,home_coach),
+      posteam == home_team,away_coach,home_coach))
     
-  )
+roster<-load_rosters(seasons = c(year))
+
+
+
+
 
 
 pass_df<-pass %>%
   dplyr::select(play_id,success,score_differential,ydstogo,down,yardline_100,
-                game_seconds_remaining,quarter_seconds_remaining,half_seconds_remaining,drive,
-                qtr,shotgun,no_huddle,pass_length,first_down_pass,
-                passer_id,receiver_id,post_team_coach,def_team_coach) %>%
+                qtr,shotgun,
+                passer_id,receiver_id,post_team_coach,def_team_coach,season) %>%
   dplyr::filter(complete.cases(success),
                 down < 4
                 )
 ### rescale & center variables
 pass_preprocess <- pass_df %>%
   select_if(is_numeric) %>%  
-  select(-play_id,-success,-drive,-qtr,-shotgun,
-         -no_huddle,-first_down_pass,-down) %>% 
+  dplyr::select(-play_id,-success,-qtr,-shotgun,-season,
+        -down) %>% 
   preProcess(method = c("center", "scale")) 
 
 pass_df <- predict(pass_preprocess, newdata = pass_df)
@@ -80,7 +78,7 @@ pass.success.mod.mcmc<-stan_glmer(success ~
                                     (1|def_team_coach),
                            data = pass_df_final,
                            family=binomial(link="probit"),
-                           chains = 4,
+                           chains = 3,
                            prior_intercept = normal(0,10),
                            prior = normal(0,1),
                            prior_aux = exponential(1),
@@ -89,9 +87,9 @@ pass.success.mod.mcmc<-stan_glmer(success ~
                            iter = 1000,
                            QR = FALSE)
 
-saveRDS(pass.success.mod.mcmc,"pass_success_mcmc.rds")
+saveRDS(pass.success.mod.mcmc,"pass_success_mcmc_2021.rds")
 
-pass.success.mod.mcmc<-readRDS("pass_success_mcmc.rds")
+#pass.success.mod.mcmc<-readRDS("pass_success_mcmc.rds")
 
 
 ## view model results ###
@@ -110,8 +108,8 @@ passer.vals$passer<-stringr::str_sub(
   passer.vals$parms,25,34
 )
 
-passer_names<-pbp %>%
-  select(passer_id,passer_player_name) %>%
+passer_names<-pass %>%
+  select(passer_id,passer_player_name,season) %>%
   distinct() %>%
   left_join(roster,by=c("passer_id" = "gsis_id")) %>%
   select(passer_id,passer_player_name,full_name,headshot_url,years_exp,position,depth_chart_position) %>%
@@ -122,7 +120,7 @@ passer.vals<-passer.vals %>%
 
 passer.vals<-passer.vals %>%
   dplyr::select(-parms) %>%
-  dplyr::select(full_name,mean,mcse,sd,`10%`,`50%`,`90%`,n_eff,Rhat,headshot_url,years_exp,position) %>%
+  dplyr::select(full_name,mean,mcse,sd,`10%`,`50%`,`90%`,n_eff,Rhat) %>%
   dplyr::arrange(desc(mean))
 
 passer.vals<-passer.vals %>%
@@ -177,20 +175,20 @@ pass.success.mcmc.preds$wo_passer_plus1SD<-with(pass.success.mcmc.preds,
 
 ##### summarize predictor values ####
 pass.mcmc.final<-pass.success.mcmc.preds %>%
-  dplyr::group_by(passer_id)%>%
+  dplyr::group_by(passer_id,season)%>%
   dplyr::summarise(
     mcmc.mean = mean(fitted.values - wo_passer),
     mcmc.sd = mean(wo_passer_plus1SD - wo_passer),
     chances = n()
   ) %>%
-  dplyr::left_join(roster,by=c("passer_id" = "gsis_id")) %>%
-  dplyr::select(passer_id,full_name,position,team,chances,mcmc.mean,mcmc.sd,headshot_url) %>%
+  dplyr::left_join(roster,by=c("passer_id" = "gsis_id","season"="season")) %>%
+  dplyr::select(passer_id,full_name,position,team,season,chances,mcmc.mean,mcmc.sd,headshot_url) %>%
   arrange(desc(mcmc.mean))
 
 pass.mcmc.final<-pass.mcmc.final %>% filter(position == "QB")
 
 pass.mcmc.final %>%
-  filter(chances > 1000) %>%
+  filter(chances > 200) %>%
   head(10L)
 
 
@@ -237,14 +235,14 @@ pass.frame.sim.preds$wo_passer_plus1SD<-pnorm(predict(
 
 ##### Compile and compare simulation results to MCMC ######
 pass.sim.final<-pass.frame.sim.preds %>%
-  dplyr::group_by(passer_id) %>%
+  dplyr::group_by(passer_id,season) %>%
   dplyr::summarise(
     sim.mean = mean(all_frame - wo_passer),
     sim.sd = mean(wo_passer_plus1SD - wo_passer),
     chances = n()
   ) %>%
-  dplyr::left_join(roster,by=c("passer_id" = "gsis_id")) %>%
-  dplyr::select(passer_id,full_name,position,team,chances,sim.mean,sim.sd,headshot_url) 
+  dplyr::left_join(roster,by=c("passer_id" = "gsis_id","season"="season")) %>%
+  dplyr::select(passer_id,full_name,position,team,season,chances,sim.mean,sim.sd,headshot_url) 
 
 
 
@@ -253,15 +251,17 @@ pass.sim.final<-pass.frame.sim.preds %>%
 pass.sim.mcmc<-pass.sim.final %>%
   dplyr::inner_join(pass.mcmc.final,
                     by=c('full_name','chances')) %>%
-  dplyr::select(full_name,passer_id.x,position.x,team.x,chances,
+  dplyr::select(full_name,passer_id.x,position.x,team.x,season.x,chances,
                 mcmc.mean,sim.mean,mcmc.sd,sim.sd,headshot_url.x) %>%
   dplyr::rename(position = position.x,
                 team = team.x,
                 passer_id = passer_id.x,
+                season = season.x,
                 headshot_url = headshot_url.x) %>%
+  dplyr::filter(position == "QB") %>%
   dplyr::arrange(desc(sim.mean))
 
-
+write.csv(pass.sim.mcmc,"pass.sim.mcmc_2021.csv")
 
 ### compare means ###
 pass.sim.mcmc %>%
@@ -419,4 +419,39 @@ a<-tab_data %>%
   slice(1:10) %>% 
   tab_function()
 a
+
+
+
+#### combine all data
+y1<-read.csv("pass.sim.mcmc_1999.csv")
+y2<-read.csv("pass.sim.mcmc_2000.csv")
+y3<-read.csv("pass.sim.mcmc_2001.csv")
+y4<-read.csv("pass.sim.mcmc_2002.csv")
+y5<-read.csv("pass.sim.mcmc_2003.csv")
+y6<-read.csv("pass.sim.mcmc_2004.csv")
+y7<-read.csv("pass.sim.mcmc_2005.csv")
+y8<-read.csv("pass.sim.mcmc_2006.csv")
+y9<-read.csv("pass.sim.mcmc_2007.csv")
+y10<-read.csv("pass.sim.mcmc_2008.csv")
+y11<-read.csv("pass.sim.mcmc_2009.csv")
+y12<-read.csv("pass.sim.mcmc_2010.csv")
+y13<-read.csv("pass.sim.mcmc_2011.csv")
+y14<-read.csv("pass.sim.mcmc_2012.csv")
+y15<-read.csv("pass.sim.mcmc_2013.csv")
+y16<-read.csv("pass.sim.mcmc_2014.csv")
+y17<-read.csv("pass.sim.mcmc_2015.csv")
+y18<-read.csv("pass.sim.mcmc_2016.csv")
+y19<-read.csv("pass.sim.mcmc_2017.csv")
+y20<-read.csv("pass.sim.mcmc_2018.csv")
+y21<-read.csv("pass.sim.mcmc_2019.csv")
+y22<-read.csv("pass.sim.mcmc_2020.csv")
+y23<-read.csv("pass.sim.mcmc_2021.csv")
+
+pass.sim.mcmc_all<-rbind(
+  y1,y2,y3,y4,y5,y6,y7,y8,y9,y10,y11,y12,y13,
+  y14,y15,y16,y17,y18,y19,y20,y21,y22,y23
+)
+
+
+write.csv(pass.sim.mcmc_all,"pass.sim.mcmc_all.csv")
 
